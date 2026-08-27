@@ -9,7 +9,15 @@ ChaCha20-Poly1305 encrypted channel.
 This is an SSH-like shell, **not an implementation of the SSH wire protocol**.
 It has no file transfer, forwarding, user database, or other SSH features.
 
-## Build
+## Install
+
+Install the published binary from crates.io:
+
+```sh
+cargo install shex
+```
+
+Or build the latest source checkout:
 
 ```sh
 cargo build --release
@@ -21,8 +29,8 @@ Initialization prompts twice for the code and writes private credential files
 with mode `0600` on Unix:
 
 ```sh
-./target/release/shex init --data-dir .shex
-./target/release/shex serve --bind 0.0.0.0:8022 --data-dir .shex
+shex init --data-dir .shex
+shex serve --bind 0.0.0.0:8022 --data-dir .shex
 ```
 
 Use a high-entropy code. OPAQUE with Argon2 makes a stolen password record
@@ -31,7 +39,7 @@ harder to attack, but a very short numeric code is still guessable.
 ## Connect
 
 ```sh
-./target/release/shex connect server.example:8022
+shex connect server.example:8022
 ```
 
 The client prints the new session ID. The server keeps that shell process alive
@@ -47,14 +55,14 @@ shex> export MODE=production
 Resume it interactively:
 
 ```sh
-./target/release/shex connect server.example:8022 \
+shex connect server.example:8022 \
   --session 3ae162b90f944fa4654dbb49a36cc734
 ```
 
 Or execute without an interactive terminal:
 
 ```sh
-./target/release/shex exec --address server.example:8022 \
+shex exec --address server.example:8022 \
   --session 3ae162b90f944fa4654dbb49a36cc734 -- pwd
 ```
 
@@ -62,7 +70,7 @@ For automation, pass the code on standard input instead of exposing it as a
 process argument:
 
 ```sh
-printf '%s\n' "$SHEX_CODE" | ./target/release/shex exec \
+printf '%s\n' "$SHEX_CODE" | shex exec \
   --address server.example:8022 \
   --session 3ae162b90f944fa4654dbb49a36cc734 \
   --code-stdin -- 'printf "hello\\n"'

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "A tiny OPAQUE-authenticated encrypted remote shell"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/morphym/shex"
+homepage = "https://github.com/morphym/shex"
+keywords = ["remote-shell", "opaque", "pake", "encryption", "cli"]
+categories = ["command-line-utilities", "network-programming", "cryptography"]
+exclude = ["work/**", "outputs/**"]
 
 [dependencies]
 anyhow = "1.0"
