@@ -1,0 +1,20 @@
+[package]
+name = "shex"
+version = "0.1.0"
+edition = "2024"
+description = "A tiny OPAQUE-authenticated encrypted remote shell"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+hkdf = "0.12"
+opaque-ke = { version = "4.0.1", features = ["argon2", "ristretto255"] }
+rand = "0.9"
+rand_core = { version = "0.6", features = ["getrandom"] }
+rpassword = "7.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
