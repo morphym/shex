@@ -45,6 +45,9 @@ fn handle(stream: TcpStream, credentials: &ServerCredentials, sessions: &Session
     stream.set_nodelay(true)?;
     let (stream, key) = auth::server_login(stream, credentials).context("authentication failed")?;
     let mut channel = SecureChannel::server(stream, &key)?;
+    channel.send(&ServerReply::Hello {
+        server_signature: credentials.signature().to_owned(),
+    })?;
 
     let requested = match channel.recv::<ClientRequest>()? {
         ClientRequest::Open { session } => session,
@@ -148,12 +151,8 @@ impl ShellSession {
             if self.output.read_until(b'\n', &mut line)? == 0 {
                 bail!("shell process exited");
             }
-            let text = String::from_utf8_lossy(&line);
-            if let Some(rest) = text.strip_prefix(&prefix) {
-                let status = rest
-                    .trim_end_matches(['\r', '\n', '\u{1f}'])
-                    .parse()
-                    .unwrap_or(1);
+            if let Some((output_end, status)) = completion_in(&line, prefix.as_bytes()) {
+                collected.extend_from_slice(&line[..output_end]);
                 return Ok((String::from_utf8_lossy(&collected).into_owned(), status));
             }
             collected.extend_from_slice(&line);
@@ -161,5 +160,53 @@ impl ShellSession {
                 bail!("command output exceeded 16 MiB");
             }
         }
+    }
+}
+
+fn completion_in(chunk: &[u8], prefix: &[u8]) -> Option<(usize, i32)> {
+    let marker_start = chunk
+        .windows(prefix.len())
+        .position(|window| window == prefix)?;
+    let status_start = marker_start + prefix.len();
+    let status_end = status_start
+        + chunk[status_start..]
+            .iter()
+            .position(|byte| *byte == 0x1f)?;
+    let status = std::str::from_utf8(&chunk[status_start..status_end])
+        .ok()?
+        .parse()
+        .ok()?;
+    Some((marker_start, status))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ShellSession, completion_in};
+
+    #[test]
+    fn finds_completion_after_output_without_a_newline() {
+        let chunk = b"\x1b[H\x1b[2J\x1b[3J\x1eSHEX-test:0\x1f\n";
+        assert_eq!(completion_in(chunk, b"\x1eSHEX-test:"), Some((11, 0)));
+    }
+
+    #[test]
+    fn ignores_an_incomplete_completion_marker() {
+        assert_eq!(
+            completion_in(b"output\x1eSHEX-test:0", b"\x1eSHEX-test:"),
+            None
+        );
+    }
+
+    #[test]
+    fn shell_handles_commands_without_trailing_newlines() {
+        let mut shell = ShellSession::spawn().unwrap();
+        let (plain, plain_status) = shell.run("printf 'no newline'").unwrap();
+        assert_eq!((plain.as_str(), plain_status), ("no newline", 0));
+
+        let (clear, clear_status) = shell.run("printf '\\033[H\\033[2J\\033[3J'").unwrap();
+        assert_eq!(
+            (clear.as_bytes(), clear_status),
+            (b"\x1b[H\x1b[2J\x1b[3J".as_slice(), 0)
+        );
     }
 }

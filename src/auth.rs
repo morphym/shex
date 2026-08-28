@@ -8,7 +8,7 @@ use opaque_ke::{
     ServerSetup, TripleDh, argon2::Argon2,
 };
 use rand_core::OsRng;
-use sha2::Sha512;
+use sha2::{Digest, Sha256, Sha512};
 
 use crate::channel::{read_frame, write_frame};
 
@@ -68,6 +68,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 pub struct ServerCredentials {
     setup: ServerSetup<ShexSuite>,
     record: ServerRegistration<ShexSuite>,
+    signature: String,
 }
 
 impl ServerCredentials {
@@ -76,10 +77,19 @@ impl ServerCredentials {
             .context("missing server setup; run `shex init` first")?;
         let record = fs::read(data_dir.join(PASSWORD_FILE))
             .context("missing password record; run `shex init` first")?;
+        let signature = Sha256::digest(&setup)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         Ok(Self {
             setup: ServerSetup::deserialize(&setup)?,
             record: ServerRegistration::deserialize(&record)?,
+            signature,
         })
+    }
+
+    pub fn signature(&self) -> &str {
+        &self.signature
     }
 }
 

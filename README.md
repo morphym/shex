@@ -17,6 +17,12 @@ Install the published binary from crates.io:
 cargo install shex
 ```
 
+Upgrade an existing installation:
+
+```sh
+cargo install shex --force
+```
+
 Or build the latest source checkout:
 
 ```sh
@@ -37,6 +43,8 @@ Use a high-entropy code. OPAQUE with Argon2 makes a stolen password record
 harder to attack, but a very short numeric code is still guessable.
 
 ## Connect
+
+For an interactive one-off connection, authenticate directly:
 
 ```sh
 shex connect server.example:8022
@@ -59,21 +67,49 @@ shex connect server.example:8022 \
   --session 3ae162b90f944fa4654dbb49a36cc734
 ```
 
-Or execute without an interactive terminal:
+## Saved authentication and non-interactive execution
+
+Authenticate once before using `exec`:
 
 ```sh
-shex exec --address server.example:8022 \
-  --session 3ae162b90f944fa4654dbb49a36cc734 -- pwd
+shex authenticate server.example:8022
 ```
 
-For automation, pass the code on standard input instead of exposing it as a
-process argument:
+This creates `.shex_auth`. The credential payload is encrypted with
+ChaCha20-Poly1305, while its random decryption key is stored in the operating
+system credential manager (macOS Keychain, Windows Credential Manager, or the
+Linux Secret Service). The encrypted payload is bound to the authenticated
+server's setup fingerprint.
+
+The encrypted file and its OS credential-store entry belong together. Copying
+only `.shex_auth` to another machine or OS account will not copy the decryption
+key; run `shex authenticate` again on that machine instead.
+
+If `.shex_auth` already exists, shex creates `.shex_auth_01`, then
+`.shex_auth_02`, and prints the exact `--auth-file` argument required to use it.
+
+`exec` reads `.shex_auth` and creates a new persistent shell session by default:
 
 ```sh
-printf '%s\n' "$SHEX_CODE" | shex exec \
-  --address server.example:8022 \
-  --session 3ae162b90f944fa4654dbb49a36cc734 \
-  --code-stdin -- 'printf "hello\\n"'
+shex exec -- pwd
+```
+
+Reuse the most recent session recorded in that auth file:
+
+```sh
+shex exec --past -- pwd
+```
+
+An explicit session ID remains available:
+
+```sh
+shex exec --session 3ae162b90f944fa4654dbb49a36cc734 -- pwd
+```
+
+Use a non-default auth file when `authenticate` created another one:
+
+```sh
+shex exec --auth-file .shex_auth_01 -- pwd
 ```
 
 ## Security boundary
@@ -84,6 +120,16 @@ printf '%s\n' "$SHEX_CODE" | shex exec \
 - All post-authentication messages are authenticated and encrypted.
 - Sessions are memory-only and disappear when the server restarts.
 - Every reconnect must authenticate; a session ID alone is insufficient.
+- Saved credentials are encrypted at rest and their keys are kept outside the
+  binary in the operating system credential manager.
+- Auth files are usable only with the server fingerprint recorded during
+  `authenticate`; a different server is rejected.
 - The server runs commands with the same operating-system privileges as `shex`.
 - There is no PTY emulation, so full-screen programs such as editors are outside
   this minimal tool's scope.
+
+## Upgrading from 0.1
+
+Version 0.2 adds the authenticated server-identity handshake used by saved auth
+files. Upgrade the server and client together, then run `shex authenticate` once
+before using the new `exec` workflow.

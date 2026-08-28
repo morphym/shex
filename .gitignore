@@ -1,4 +1,5 @@
 /target/
-/work/test-server/
+/work/
 /outputs/
 .shex/
+.shex_auth*
