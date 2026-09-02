@@ -18,7 +18,8 @@
 9. `latency test` measures Redis PING round trips and, when a saved host is
    selected, authenticated encrypted ping/pong round trips through that host.
 10. `redis add` stores named Redis URLs in the operating-system credential
-    store and writes only a hashed local marker under `~/.shex/redis`.
+    store, writes only a hashed local marker under `~/.shex/redis`, verifies the
+    server before saving, and selects the newest entry as the local default.
 
 The Redis hostname and session hash are routing metadata. Authentication codes,
 session identifiers, commands, output, and shell state are never Redis

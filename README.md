@@ -41,18 +41,30 @@ TLS, and a dedicated database or account in production.
 Give a Redis URL a local name:
 
 ```sh
+shex redis add
+```
+
+With no arguments, shex interactively asks for the name and hides the Redis URL
+while it is entered. Arguments remain available for automation:
+
+```sh
 shex redis add local redis://127.0.0.1:6379/
 ```
 
-When `REDIS_URL` is already set, the URL argument can be omitted:
-
-```sh
-shex redis add cloud
-```
+When `REDIS_URL` is already set, only the name is needed. Shex sends a Redis
+`PING` before saving. If the server cannot be reached, it asks whether the entry
+should be kept anyway.
 
 The URL is stored in macOS Keychain or Linux Secret Service. Only a private,
-hashed marker is written under `~/.shex/redis`. A saved name can be used anywhere
-that accepts `--redis-url`:
+hashed marker is written under `~/.shex/redis`. The most recently added server
+becomes the default, so this uses it automatically:
+
+```sh
+shex latency test
+```
+
+A saved name can also be selected explicitly anywhere that accepts
+`--redis-url`:
 
 ```sh
 shex latency test --redis-url cloud

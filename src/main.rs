@@ -34,13 +34,8 @@ enum Command {
     },
     /// Host encrypted shell sessions through Redis.
     Serve {
-        #[arg(
-            long,
-            env = "REDIS_URL",
-            hide_env_values = true,
-            default_value = "redis://127.0.0.1/"
-        )]
-        redis_url: String,
+        #[arg(long, env = "REDIS_URL", hide_env_values = true)]
+        redis_url: Option<String>,
         /// Permanent Redis hostname; generated and saved on first use if omitted.
         #[arg(long)]
         hostname: Option<String>,
@@ -51,13 +46,8 @@ enum Command {
     #[command(name = "auth", visible_alias = "authenticate")]
     Auth {
         hostname: String,
-        #[arg(
-            long,
-            env = "REDIS_URL",
-            hide_env_values = true,
-            default_value = "redis://127.0.0.1/"
-        )]
-        redis_url: String,
+        #[arg(long, env = "REDIS_URL", hide_env_values = true)]
+        redis_url: Option<String>,
         #[arg(long)]
         code_stdin: bool,
         #[arg(long, default_value_os_t = auth_file::default_store_dir())]
@@ -135,9 +125,9 @@ enum LatencyAction {
 enum RedisAction {
     /// Save or update a named Redis URL in the OS credential store.
     Add {
-        name: String,
+        name: Option<String>,
         #[arg(env = "REDIS_URL", hide_env_values = true)]
-        redis_url: String,
+        redis_url: Option<String>,
         #[arg(long, default_value_os_t = auth_file::default_store_dir())]
         store_dir: PathBuf,
     },
@@ -163,6 +153,41 @@ fn read_code(force_stdin: bool, confirm: bool) -> Result<Vec<u8>> {
     Ok(code.into_bytes())
 }
 
+fn prompt_line(label: &str) -> Result<String> {
+    eprint!("{label}");
+    io::stderr().flush()?;
+    let mut value = String::new();
+    io::stdin().read_line(&mut value)?;
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        bail!("a value is required");
+    }
+    Ok(value)
+}
+
+fn prompt_redis_url() -> Result<String> {
+    if io::stdin().is_terminal() {
+        let value = rpassword::prompt_password("Redis URL: ")?;
+        if value.trim().is_empty() {
+            bail!("a Redis URL is required");
+        }
+        Ok(value.trim().to_owned())
+    } else {
+        prompt_line("Redis URL: ")
+    }
+}
+
+fn confirm_save_unreachable() -> Result<bool> {
+    eprint!("Save this server anyway? [y/N] ");
+    io::stderr().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
 fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = dotenvy::dotenv();
@@ -178,7 +203,10 @@ fn main() -> Result<()> {
             hostname,
             data_dir,
         } => {
-            let redis_url = redis_store::resolve(&auth_file::default_store_dir(), &redis_url)?;
+            let redis_url = redis_store::resolve_or_default(
+                &auth_file::default_store_dir(),
+                redis_url.as_deref(),
+            )?;
             server::serve(&redis_url, hostname.as_deref(), &data_dir)?;
         }
         Command::Auth {
@@ -187,7 +215,7 @@ fn main() -> Result<()> {
             code_stdin,
             store_dir,
         } => {
-            let redis_url = redis_store::resolve(&store_dir, &redis_url)?;
+            let redis_url = redis_store::resolve_or_default(&store_dir, redis_url.as_deref())?;
             let code = read_code(code_stdin, false)?;
             let (mut channel, server_signature) =
                 client_channel(&redis_url, &hostname, &code, None)?;
@@ -214,8 +242,7 @@ fn main() -> Result<()> {
         } => {
             let mut channel = if code_stdin {
                 let code = read_code(true, false)?;
-                let reference = redis_url.as_deref().unwrap_or("redis://127.0.0.1/");
-                let redis_url = redis_store::resolve(&store_dir, reference)?;
+                let redis_url = redis_store::resolve_or_default(&store_dir, redis_url.as_deref())?;
                 client_channel(&redis_url, &hostname, &code, None)?.0
             } else {
                 let saved = load_host_auth(auth_file.as_deref(), &store_dir, &hostname)?;
@@ -333,10 +360,10 @@ fn main() -> Result<()> {
                     saved.data.hostname
                 );
             }
-            let redis_reference = redis_url
-                .or_else(|| saved.as_ref().map(|auth| auth.data.redis_url.clone()))
-                .unwrap_or_else(|| "redis://127.0.0.1/".to_owned());
-            let redis_url = redis_store::resolve(&store_dir, &redis_reference)?;
+            let redis_reference =
+                redis_url.or_else(|| saved.as_ref().map(|auth| auth.data.redis_url.clone()));
+            let redis_url =
+                redis_store::resolve_or_default(&store_dir, redis_reference.as_deref())?;
             let redis_stats = redis_transport::measure_latency(&redis_url, count)?;
             print_latency("Redis round trip", &redis_stats);
 
@@ -363,6 +390,25 @@ fn main() -> Result<()> {
                     store_dir,
                 },
         } => {
+            let name = match name {
+                Some(name) => name,
+                None => prompt_line("Redis server name: ")?,
+            };
+            let redis_url = match redis_url {
+                Some(redis_url) => redis_url,
+                None => prompt_redis_url()?,
+            };
+            redis::Client::open(redis_url.as_str()).context("invalid Redis URL")?;
+            match redis_transport::measure_latency(&redis_url, 1) {
+                Ok(stats) => print_latency("Redis connection verified", &stats),
+                Err(error) => {
+                    eprintln!("Redis connection test failed: {error:#}");
+                    if !confirm_save_unreachable()? {
+                        println!("Redis server was not saved");
+                        return Ok(());
+                    }
+                }
+            }
             let path = redis_store::add(&store_dir, &name, &redis_url)?;
             println!("saved Redis server `{name}` in {}", path.display());
         }
@@ -591,7 +637,18 @@ mod cli_tests {
             cli.command,
             Command::Redis {
                 action: RedisAction::Add { name, .. }
-            } if name == "local"
+            } if name.as_deref() == Some("local")
+        ));
+    }
+
+    #[test]
+    fn parses_interactive_redis_add_without_arguments() {
+        let cli = Cli::try_parse_from(["shex", "redis", "add"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Redis {
+                action: RedisAction::Add { name: None, .. }
+            }
         ));
     }
 }

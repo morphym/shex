@@ -34,7 +34,43 @@ pub fn add(store_dir: &Path, name: &str, redis_url: &str) -> Result<PathBuf> {
         name: name.to_owned(),
     })?;
     write_private(&path, &marker)?;
+    write_private(&directory.join("default"), &marker)?;
     Ok(path)
+}
+
+pub fn resolve_or_default(store_dir: &Path, reference: Option<&str>) -> Result<String> {
+    if let Some(reference) = reference {
+        return resolve(store_dir, reference);
+    }
+
+    let directory = store_dir.join("redis");
+    let default_path = directory.join("default");
+    if default_path.exists() {
+        let marker = read_marker(&default_path)?;
+        return resolve(store_dir, &marker.name);
+    }
+
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok("redis://127.0.0.1/".to_owned());
+        }
+        Err(error) => return Err(error).context("could not read local Redis server registry"),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("server") {
+            names.push(read_marker(&path)?.name);
+        }
+    }
+    match names.as_slice() {
+        [] => Ok("redis://127.0.0.1/".to_owned()),
+        [name] => resolve(store_dir, name),
+        _ => bail!(
+            "multiple Redis servers are saved but none is selected; re-add one to make it default or pass `--redis-url NAME`"
+        ),
+    }
 }
 
 pub fn resolve(store_dir: &Path, reference: &str) -> Result<String> {
@@ -44,11 +80,9 @@ pub fn resolve(store_dir: &Path, reference: &str) -> Result<String> {
     }
     validate_name(reference)?;
     let path = marker_path(store_dir, reference);
-    check_private_permissions(&path)?;
-    let marker: Marker = serde_json::from_slice(&fs::read(&path).with_context(|| {
+    let marker = read_marker(&path).with_context(|| {
         format!("unknown Redis server `{reference}`; add it with `shex redis add {reference} URL`")
-    })?)
-    .context("invalid local Redis server marker")?;
+    })?;
     if marker.version != STORE_VERSION || marker.name != reference {
         bail!("local Redis server marker does not match `{reference}`");
     }
@@ -58,6 +92,16 @@ pub fn resolve(store_dir: &Path, reference: &str) -> Result<String> {
     let redis_url = String::from_utf8(secret).context("stored Redis URL is not valid UTF-8")?;
     redis::Client::open(redis_url.as_str()).context("stored Redis URL is invalid")?;
     Ok(redis_url)
+}
+
+fn read_marker(path: &Path) -> Result<Marker> {
+    check_private_permissions(path)?;
+    let marker: Marker =
+        serde_json::from_slice(&fs::read(path)?).context("invalid local Redis server marker")?;
+    if marker.version != STORE_VERSION {
+        bail!("unsupported local Redis server marker version");
+    }
+    Ok(marker)
 }
 
 fn validate_name(name: &str) -> Result<()> {
