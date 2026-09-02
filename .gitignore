@@ -3,3 +3,4 @@
 /outputs/
 .shex/
 .shex_auth*
+.env

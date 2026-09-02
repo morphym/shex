@@ -1,9 +1,4 @@
-use std::{
-    io::{Read, Write},
-    net::TcpStream,
-};
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit,
     aead::{Aead, Payload},
@@ -12,8 +7,15 @@ use hkdf::Hkdf;
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::Sha256;
 
+pub trait FrameTransport: Send {
+    fn send_frame(&mut self, data: &[u8]) -> Result<()>;
+    fn recv_frame(&mut self) -> Result<Vec<u8>>;
+    fn acknowledge(&mut self) -> Result<()>;
+    fn wait_indefinitely(&mut self);
+}
+
 pub struct SecureChannel {
-    stream: TcpStream,
+    transport: Box<dyn FrameTransport>,
     send: ChaCha20Poly1305,
     recv: ChaCha20Poly1305,
     send_counter: u64,
@@ -23,19 +25,21 @@ pub struct SecureChannel {
 }
 
 impl SecureChannel {
-    pub fn client(stream: TcpStream, key: &[u8]) -> Result<Self> {
-        Self::new(stream, key, b"client->server", b"server->client")
+    pub fn client(transport: Box<dyn FrameTransport>, key: &[u8]) -> Result<Self> {
+        Self::new(transport, key, b"client->server", b"server->client")
     }
-    pub fn server(stream: TcpStream, key: &[u8]) -> Result<Self> {
-        Self::new(stream, key, b"server->client", b"client->server")
+
+    pub fn server(transport: Box<dyn FrameTransport>, key: &[u8]) -> Result<Self> {
+        Self::new(transport, key, b"server->client", b"client->server")
     }
+
     fn new(
-        stream: TcpStream,
+        transport: Box<dyn FrameTransport>,
         key: &[u8],
         send_label: &'static [u8],
         recv_label: &'static [u8],
     ) -> Result<Self> {
-        let hk = Hkdf::<Sha256>::new(Some(b"shex transport v1"), key);
+        let hk = Hkdf::<Sha256>::new(Some(b"shex transport v2"), key);
         let mut c2s = [0u8; 32];
         let mut s2c = [0u8; 32];
         hk.expand(b"client->server", &mut c2s)
@@ -48,7 +52,7 @@ impl SecureChannel {
             (&s2c, &c2s)
         };
         Ok(Self {
-            stream,
+            transport,
             send: ChaCha20Poly1305::new(send_key.into()),
             recv: ChaCha20Poly1305::new(recv_key.into()),
             send_counter: 0,
@@ -57,11 +61,13 @@ impl SecureChannel {
             recv_label,
         })
     }
+
     fn nonce(counter: u64) -> [u8; 12] {
         let mut nonce = [0u8; 12];
         nonce[4..].copy_from_slice(&counter.to_be_bytes());
         nonce
     }
+
     pub fn send<T: Serialize>(&mut self, value: &T) -> Result<()> {
         let plain = serde_json::to_vec(value)?;
         let nonce = Self::nonce(self.send_counter);
@@ -75,14 +81,22 @@ impl SecureChannel {
                 },
             )
             .map_err(|_| anyhow::anyhow!("encryption failed"))?;
+        self.transport.send_frame(&encrypted)?;
         self.send_counter = self
             .send_counter
             .checked_add(1)
             .context("message counter exhausted")?;
-        write_frame(&mut self.stream, &encrypted)
+        Ok(())
     }
+
     pub fn recv<T: DeserializeOwned>(&mut self) -> Result<T> {
-        let encrypted = read_frame(&mut self.stream)?;
+        let value = self.recv_unacknowledged()?;
+        self.acknowledge()?;
+        Ok(value)
+    }
+
+    pub fn recv_unacknowledged<T: DeserializeOwned>(&mut self) -> Result<T> {
+        let encrypted = self.transport.recv_frame()?;
         let nonce = Self::nonce(self.recv_counter);
         let plain = self
             .recv
@@ -94,32 +108,19 @@ impl SecureChannel {
                 },
             )
             .map_err(|_| anyhow::anyhow!("encrypted message was invalid"))?;
+        Ok(serde_json::from_slice(&plain)?)
+    }
+
+    pub fn acknowledge(&mut self) -> Result<()> {
+        self.transport.acknowledge()?;
         self.recv_counter = self
             .recv_counter
             .checked_add(1)
             .context("message counter exhausted")?;
-        Ok(serde_json::from_slice(&plain)?)
+        Ok(())
     }
-}
 
-pub fn write_frame(stream: &mut TcpStream, data: &[u8]) -> Result<()> {
-    if data.len() > 16 * 1024 * 1024 {
-        bail!("frame too large");
+    pub fn wait_indefinitely(&mut self) {
+        self.transport.wait_indefinitely();
     }
-    stream.write_all(&(data.len() as u32).to_be_bytes())?;
-    stream.write_all(data)?;
-    stream.flush()?;
-    Ok(())
-}
-
-pub fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut length = [0u8; 4];
-    stream.read_exact(&mut length)?;
-    let length = u32::from_be_bytes(length) as usize;
-    if length > 16 * 1024 * 1024 {
-        bail!("frame too large");
-    }
-    let mut data = vec![0u8; length];
-    stream.read_exact(&mut data)?;
-    Ok(data)
 }

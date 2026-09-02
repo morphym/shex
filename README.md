@@ -1,17 +1,18 @@
 # shex
 
-`shex` is a deliberately small remote shell over TCP. A short authentication
-code is verified with OPAQUE; the code is never sent to the server and the
-server persists only an OPAQUE password record. The OPAQUE session key is then
-expanded into separate client-to-server and server-to-client keys for a
-ChaCha20-Poly1305 encrypted channel.
+`shex` is a small remote shell that uses Redis as a routing layer. OPAQUE
+authenticates a shared code without sending that code to the host or Redis.
+Commands and results use a ChaCha20-Poly1305 channel derived from the OPAQUE
+session key.
 
-This is an SSH-like shell, **not an implementation of the SSH wire protocol**.
-It has no file transfer, forwarding, user database, or other SSH features.
+Redis never receives plaintext credentials, commands, command output, or shell
+state. It sees the host and mailbox key names, encrypted payload sizes, and
+timing. This is end-to-end encrypted infrastructure rather than a generic
+zero-knowledge proof system.
+
+This is an SSH-like shell, not an implementation of the SSH wire protocol.
 
 ## Install
-
-Install the published binary from crates.io:
 
 ```sh
 cargo install shex
@@ -23,113 +24,199 @@ Upgrade an existing installation:
 cargo install shex --force
 ```
 
-Or build the latest source checkout:
+## Redis configuration
 
-```sh
-cargo build --release
+Set `REDIS_URL` in the environment or a local `.env` file. TLS Redis URLs use
+the `rediss` scheme:
+
+```dotenv
+REDIS_URL="rediss://username:password@example-redis:6379"
 ```
 
-## Initialize and run the server
+`.env` is ignored by Git and excluded from published crates. Use Redis ACLs,
+TLS, and a dedicated database or account in production.
 
-Initialization prompts twice for the code and writes private credential files
-with mode `0600` on Unix:
+## Save a local Redis server
+
+Give a Redis URL a local name:
+
+```sh
+shex redis add local redis://127.0.0.1:6379/
+```
+
+When `REDIS_URL` is already set, the URL argument can be omitted:
+
+```sh
+shex redis add cloud
+```
+
+The URL is stored in macOS Keychain or Linux Secret Service. Only a private,
+hashed marker is written under `~/.shex/redis`. A saved name can be used anywhere
+that accepts `--redis-url`:
+
+```sh
+shex latency test --redis-url cloud
+shex auth quiet-otter:1738 --redis-url cloud
+shex serve --redis-url local
+```
+
+## Start a host
+
+Initialize the host once. The authentication code is used to create an OPAQUE
+password record but is not retained by the host:
 
 ```sh
 shex init --data-dir .shex
-shex serve --bind 0.0.0.0:8022 --data-dir .shex
+shex serve --data-dir .shex
 ```
 
-Use a high-entropy code. OPAQUE with Argon2 makes a stolen password record
-harder to attack, but a very short numeric code is still guessable.
-
-## Connect
-
-For an interactive one-off connection, authenticate directly:
-
-```sh
-shex connect server.example:8022
-```
-
-The client prints the new session ID. The server keeps that shell process alive
-after the client disconnects, so state such as `cd` and exported environment
-variables remains available while the server process is running:
+On first use, `serve` assigns and saves a permanent name resembling:
 
 ```text
-session: 3ae162b90f944fa4654dbb49a36cc734
-shex> cd /srv/app
-shex> export MODE=production
+quiet-otter:1738
 ```
 
-Resume it interactively:
+Pass an explicit name to change it:
 
 ```sh
-shex connect server.example:8022 \
+shex serve --data-dir .shex --hostname my-host:1738
+```
+
+The new name is saved locally and registered permanently in Redis. Previous
+names remain reserved in Redis; global hostname reclamation is not implemented.
+
+## Authenticate a client
+
+Use the hostname printed by `serve`:
+
+```sh
+shex auth quiet-otter:1738
+```
+
+Authentication for every host is stored under `~/.shex/auth`. Filenames are
+hostname hashes. Each file contains the Redis location, hostname, server
+fingerprint, reusable credential, and last-session identifier. Its payload is
+encrypted with ChaCha20-Poly1305, while the random encryption key is held by
+macOS Keychain or Linux Secret Service through the operating-system credential
+manager. Re-running `auth` safely updates that host's entry.
+
+`shex authenticate` remains an alias for `shex auth`.
+
+## Execute and resume
+
+`exec` creates a persistent host-local shell session by default:
+
+```sh
+shex exec quiet-otter:1738 -- pwd
+shex exec quiet-otter:1738 -- cd /srv/app
+```
+
+Each command without `--past` creates a different session. Reuse the most
+recent session recorded in the selected auth file with:
+
+```sh
+shex exec --past quiet-otter:1738 -- pwd
+```
+
+An explicit session can also be selected:
+
+```sh
+shex exec --session 3ae162b90f944fa4654dbb49a36cc734 \
+  quiet-otter:1738 -- pwd
+```
+
+Legacy or manually managed auth files remain usable with
+`shex exec --auth-file PATH -- COMMAND`.
+
+Delete the last session, its host process, and its Redis lookup:
+
+```sh
+shex close quiet-otter:1738
+```
+
+Or delete a specific session:
+
+```sh
+shex close quiet-otter:1738 \
   --session 3ae162b90f944fa4654dbb49a36cc734
 ```
 
-## Saved authentication and non-interactive execution
+## Interactive connection
 
-Authenticate once before using `exec`:
-
-```sh
-shex authenticate server.example:8022
-```
-
-This creates `.shex_auth`. The credential payload is encrypted with
-ChaCha20-Poly1305, while its random decryption key is stored in the operating
-system credential manager (macOS Keychain, Windows Credential Manager, or the
-Linux Secret Service). The encrypted payload is bound to the authenticated
-server's setup fingerprint.
-
-The encrypted file and its OS credential-store entry belong together. Copying
-only `.shex_auth` to another machine or OS account will not copy the decryption
-key; run `shex authenticate` again on that machine instead.
-
-If `.shex_auth` already exists, shex creates `.shex_auth_01`, then
-`.shex_auth_02`, and prints the exact `--auth-file` argument required to use it.
-
-`exec` reads `.shex_auth` and creates a new persistent shell session by default:
+A new interactive connection is ephemeral: it is removed when the connection
+ends and does not create a Redis session lookup.
 
 ```sh
-shex exec -- pwd
+shex connect quiet-otter:1738
 ```
 
-Reuse the most recent session recorded in that auth file:
+An existing persistent `exec` session can be opened interactively:
 
 ```sh
-shex exec --past -- pwd
+shex connect quiet-otter:1738 \
+  --session 3ae162b90f944fa4654dbb49a36cc734
 ```
 
-An explicit session ID remains available:
+## Latency test
+
+Measure Redis command round-trip latency without contacting a host:
 
 ```sh
-shex exec --session 3ae162b90f944fa4654dbb49a36cc734 -- pwd
+shex latency test
 ```
 
-Use a non-default auth file when `authenticate` created another one:
+Add a saved hostname to also measure an authenticated, encrypted host round
+trip through Redis:
 
 ```sh
-shex exec --auth-file .shex_auth_01 -- pwd
+shex latency test quiet-otter:1738
 ```
+
+The report includes Redis minimum/average/maximum time, host round-trip time,
+and an estimated additional encrypted host path. The estimate subtracts the
+Redis PING baseline and is diagnostic rather than a one-way network measurement.
+Use `--count` to select between 1 and 100 samples.
+
+## Redis storage model
+
+- `shex:v2:host:<hostname>` is the small permanent host record.
+- `shex:v2:<hostname>:session:<hash>` is one fixed lookup for each active
+  persistent session. Actual shell state remains only in the host process.
+- Layer-two mailboxes contain at most one message in each direction, with only
+  one present during the request/response flow.
+- Mailbox payloads have a 60-second TTL. While a receiver is processing one,
+  an authenticated lease refresh prevents long-running commands from expiring.
+- Blocking one-shot readiness signals avoid polling while clients or hosts are
+  idle; signals carry no command or output data.
+- A received payload is compare-and-deleted only after authenticated processing.
+- Closing a session deletes its session lookup. Host startup removes stale
+  lookups because live shell processes cannot survive a host restart.
+
+Redis may temporarily hold ciphertext in memory, replicas, RDB snapshots, or
+AOF according to its configuration. Disable Redis persistence for the shex
+database if ciphertext must never reach Redis disk.
 
 ## Security boundary
 
-- Authentication is OPAQUE (an augmented password-authenticated key exchange),
-  not a generic zero-knowledge proof system.
-- The code does not cross the network and is not stored by the server.
-- All post-authentication messages are authenticated and encrypted.
-- Sessions are memory-only and disappear when the server restarts.
-- Every reconnect must authenticate; a session ID alone is insufficient.
-- Saved credentials are encrypted at rest and their keys are kept outside the
-  binary in the operating system credential manager.
-- Auth files are usable only with the server fingerprint recorded during
-  `authenticate`; a different server is rejected.
-- The server runs commands with the same operating-system privileges as `shex`.
-- There is no PTY emulation, so full-screen programs such as editors are outside
-  this minimal tool's scope.
+- OPAQUE with Argon2 protects the authentication exchange.
+- ChaCha20-Poly1305 authenticates and encrypts post-login traffic.
+- Auth files are encrypted and bound to the authenticated host fingerprint.
+- Saved Redis URLs are held by the operating-system credential store; local
+  marker filenames are hashes of their aliases.
+- Redis routing metadata, message sizes, and timing are not hidden.
+- Use a high-entropy code; a short numeric code remains guessable.
+- Redis access is local/private trust in 2.0. Redis ACLs remain important because
+  an attacker with write access can deny service even without decrypting data.
+- The host runs commands with the operating-system privileges of `shex`.
+- There is no PTY emulation, file transfer, port forwarding, or full-screen
+  terminal support.
 
-## Upgrading from 0.1
+## Deferred work
 
-Version 0.2 adds the authenticated server-identity handshake used by saved auth
-files. Upgrade the server and client together, then run `shex authenticate` once
-before using the new `exec` workflow.
+All planned but unimplemented work is centralized in [`TODO.md`](TODO.md).
+
+## Upgrading from 0.x
+
+Version 2.0 replaces direct TCP transport with Redis and is not wire-compatible
+with 0.x. Upgrade hosts and clients together, configure `REDIS_URL`, restart the
+host, and run `shex auth <hostname>` again to create a version-2 auth entry.

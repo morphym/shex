@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
+    fs,
     io::{BufRead, BufReader, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
@@ -14,52 +14,100 @@ use crate::{
     auth::{self, ServerCredentials},
     channel::SecureChannel,
     protocol::{ClientRequest, ServerReply},
+    redis_transport::{self, HostListener, RedisTransport},
 };
 
-type Sessions = Arc<Mutex<HashMap<String, Arc<Mutex<ShellSession>>>>>;
+type Sessions = Arc<Mutex<HashMap<String, Arc<Session>>>>;
 
-pub fn serve(bind: SocketAddr, data_dir: &Path) -> Result<()> {
+struct Session {
+    shell: Mutex<ShellSession>,
+    lookup_key: Option<String>,
+}
+
+pub fn serve(redis_url: &str, requested_hostname: Option<&str>, data_dir: &Path) -> Result<()> {
     let credentials = Arc::new(ServerCredentials::load(data_dir)?);
-    let listener = TcpListener::bind(bind).with_context(|| format!("could not bind {bind}"))?;
+    let hostname = resolve_hostname(data_dir, requested_hostname)?;
+    let mut listener = HostListener::register(redis_url, &hostname, credentials.signature())?;
+    persist_hostname(data_dir, &hostname)?;
+    redis_transport::clear_session_lookups(redis_url, &hostname)?;
     let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
-    eprintln!("shex listening on {bind}");
+    eprintln!("shex host: {hostname}");
+    eprintln!("waiting through Redis");
 
-    for incoming in listener.incoming() {
-        match incoming {
-            Ok(stream) => {
+    loop {
+        match listener.accept() {
+            Ok(transport) => {
                 let credentials = credentials.clone();
                 let sessions = sessions.clone();
+                let redis_url = redis_url.to_owned();
+                let hostname = hostname.clone();
                 thread::spawn(move || {
-                    if let Err(error) = handle(stream, &credentials, &sessions) {
+                    if let Err(error) =
+                        handle(transport, &credentials, &sessions, &redis_url, &hostname)
+                    {
                         eprintln!("connection ended: {error:#}");
                     }
                 });
             }
-            Err(error) => eprintln!("accept failed: {error}"),
+            Err(error) => eprintln!("Redis accept failed: {error:#}"),
         }
     }
-    Ok(())
 }
 
-fn handle(stream: TcpStream, credentials: &ServerCredentials, sessions: &Sessions) -> Result<()> {
-    stream.set_nodelay(true)?;
-    let (stream, key) = auth::server_login(stream, credentials).context("authentication failed")?;
-    let mut channel = SecureChannel::server(stream, &key)?;
+fn handle(
+    mut transport: RedisTransport,
+    credentials: &ServerCredentials,
+    sessions: &Sessions,
+    redis_url: &str,
+    hostname: &str,
+) -> Result<()> {
+    let key = auth::server_login(&mut transport, credentials).context("authentication failed")?;
+    let mut channel = SecureChannel::server(Box::new(transport), &key)?;
     channel.send(&ServerReply::Hello {
         server_signature: credentials.signature().to_owned(),
     })?;
 
-    let requested = match channel.recv::<ClientRequest>()? {
-        ClientRequest::Open { session } => session,
-        _ => bail!("the first request must open a session"),
+    let (requested, persistent) = loop {
+        match channel.recv_unacknowledged::<ClientRequest>()? {
+            ClientRequest::Open {
+                session,
+                persistent,
+            } => break (session, persistent),
+            ClientRequest::Ping => {
+                channel.acknowledge()?;
+                channel.send(&ServerReply::Pong)?;
+            }
+            ClientRequest::DeleteSession { session } => {
+                let removed = sessions.lock().unwrap().remove(&session);
+                let Some(removed) = removed else {
+                    channel.acknowledge()?;
+                    channel.send(&ServerReply::Error {
+                        message: "unknown session".into(),
+                    })?;
+                    return Ok(());
+                };
+                if let Some(key) = &removed.lookup_key {
+                    redis_transport::delete_session_lookup(redis_url, key)?;
+                }
+                channel.acknowledge()?;
+                channel.send(&ServerReply::Deleted { session })?;
+                return Ok(());
+            }
+            ClientRequest::Disconnect => {
+                channel.acknowledge()?;
+                return Ok(());
+            }
+            ClientRequest::Run { .. } => bail!("the first request must open or delete a session"),
+        }
     };
 
-    let (id, shell) = match requested {
+    let (id, session) = match requested {
         Some(id) => {
-            let shell = sessions.lock().unwrap().get(&id).cloned();
-            match shell {
-                Some(shell) => (id, shell),
+            let session = sessions.lock().unwrap().get(&id).cloned();
+            match session {
+                Some(session) => (id, session),
                 None => {
+                    channel.acknowledge()?;
                     channel.send(&ServerReply::Error {
                         message: "unknown session".into(),
                     })?;
@@ -69,17 +117,32 @@ fn handle(stream: TcpStream, credentials: &ServerCredentials, sessions: &Session
         }
         None => {
             let id = random_id();
-            let shell = Arc::new(Mutex::new(ShellSession::spawn()?));
-            sessions.lock().unwrap().insert(id.clone(), shell.clone());
-            (id, shell)
+            let lookup_key = if persistent {
+                Some(redis_transport::create_session_lookup(
+                    redis_url, hostname, &id,
+                )?)
+            } else {
+                None
+            };
+            let session = Arc::new(Session {
+                shell: Mutex::new(ShellSession::spawn()?),
+                lookup_key,
+            });
+            if persistent {
+                sessions.lock().unwrap().insert(id.clone(), session.clone());
+            }
+            (id, session)
         }
     };
+    channel.acknowledge()?;
     channel.send(&ServerReply::Opened { session: id })?;
+    channel.wait_indefinitely();
 
     loop {
-        match channel.recv::<ClientRequest>() {
+        match channel.recv_unacknowledged::<ClientRequest>() {
             Ok(ClientRequest::Run { command }) => {
-                let result = shell.lock().unwrap().run(&command);
+                let result = session.shell.lock().unwrap().run(&command);
+                channel.acknowledge()?;
                 match result {
                     Ok((data, status)) => channel.send(&ServerReply::Output { data, status })?,
                     Err(error) => channel.send(&ServerReply::Error {
@@ -87,13 +150,49 @@ fn handle(stream: TcpStream, credentials: &ServerCredentials, sessions: &Session
                     })?,
                 }
             }
-            Ok(ClientRequest::Open { .. }) => channel.send(&ServerReply::Error {
-                message: "session is already open".into(),
-            })?,
+            Ok(ClientRequest::Open { .. }) => {
+                channel.acknowledge()?;
+                channel.send(&ServerReply::Error {
+                    message: "session is already open".into(),
+                })?;
+            }
+            Ok(ClientRequest::DeleteSession { .. }) => {
+                channel.acknowledge()?;
+                channel.send(&ServerReply::Error {
+                    message: "cannot delete a session from an open connection".into(),
+                })?;
+            }
+            Ok(ClientRequest::Ping) => {
+                channel.acknowledge()?;
+                channel.send(&ServerReply::Pong)?;
+            }
+            Ok(ClientRequest::Disconnect) => {
+                channel.acknowledge()?;
+                return Ok(());
+            }
             Err(error) if is_disconnect(&error) => return Ok(()),
             Err(error) => return Err(error),
         }
     }
+}
+
+fn resolve_hostname(data_dir: &Path, requested: Option<&str>) -> Result<String> {
+    let path = data_dir.join("hostname");
+    if let Some(hostname) = requested {
+        return Ok(hostname.to_owned());
+    }
+    if let Ok(hostname) = fs::read_to_string(&path) {
+        let hostname = hostname.trim().to_owned();
+        if !hostname.is_empty() {
+            return Ok(hostname);
+        }
+    }
+    Ok(redis_transport::random_hostname())
+}
+
+fn persist_hostname(data_dir: &Path, hostname: &str) -> Result<()> {
+    fs::write(data_dir.join("hostname"), format!("{hostname}\n"))?;
+    Ok(())
 }
 
 fn is_disconnect(error: &anyhow::Error) -> bool {
@@ -115,7 +214,7 @@ fn random_id() -> String {
 }
 
 struct ShellSession {
-    _child: Child,
+    child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
 }
@@ -132,7 +231,7 @@ impl ShellSession {
         let input = child.stdin.take().context("shell stdin unavailable")?;
         let output = BufReader::new(child.stdout.take().context("shell stdout unavailable")?);
         Ok(Self {
-            _child: child,
+            child,
             input,
             output,
         })
@@ -160,6 +259,13 @@ impl ShellSession {
                 bail!("command output exceeded 16 MiB");
             }
         }
+    }
+}
+
+impl Drop for ShellSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

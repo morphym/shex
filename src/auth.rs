@@ -1,4 +1,4 @@
-use std::{fs, net::TcpStream, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use opaque_ke::{
@@ -10,7 +10,7 @@ use opaque_ke::{
 use rand_core::OsRng;
 use sha2::{Digest, Sha256, Sha512};
 
-use crate::channel::{read_frame, write_frame};
+use crate::channel::FrameTransport;
 
 pub struct ShexSuite;
 
@@ -93,27 +93,29 @@ impl ServerCredentials {
     }
 }
 
-pub fn client_login(mut stream: TcpStream, code: &[u8]) -> Result<(TcpStream, Vec<u8>)> {
+pub fn client_login(transport: &mut dyn FrameTransport, code: &[u8]) -> Result<Vec<u8>> {
     let mut rng = OsRng;
     let start = ClientLogin::<ShexSuite>::start(&mut rng, code)?;
-    write_frame(&mut stream, &start.message.serialize())?;
+    transport.send_frame(&start.message.serialize())?;
 
-    let response = CredentialResponse::<ShexSuite>::deserialize(&read_frame(&mut stream)?)?;
+    let response = CredentialResponse::<ShexSuite>::deserialize(&transport.recv_frame()?)?;
+    transport.acknowledge()?;
     let finish = start.state.finish(
         &mut rng,
         code,
         response,
         ClientLoginFinishParameters::default(),
     )?;
-    write_frame(&mut stream, &finish.message.serialize())?;
-    Ok((stream, finish.session_key.to_vec()))
+    transport.send_frame(&finish.message.serialize())?;
+    Ok(finish.session_key.to_vec())
 }
 
 pub fn server_login(
-    mut stream: TcpStream,
+    transport: &mut dyn FrameTransport,
     credentials: &ServerCredentials,
-) -> Result<(TcpStream, Vec<u8>)> {
-    let request = CredentialRequest::<ShexSuite>::deserialize(&read_frame(&mut stream)?)?;
+) -> Result<Vec<u8>> {
+    let request = CredentialRequest::<ShexSuite>::deserialize(&transport.recv_frame()?)?;
+    transport.acknowledge()?;
     let mut rng = OsRng;
     let start = ServerLogin::start(
         &mut rng,
@@ -123,11 +125,12 @@ pub fn server_login(
         IDENTITY,
         ServerLoginParameters::default(),
     )?;
-    write_frame(&mut stream, &start.message.serialize())?;
+    transport.send_frame(&start.message.serialize())?;
 
-    let finalization = CredentialFinalization::<ShexSuite>::deserialize(&read_frame(&mut stream)?)?;
+    let finalization = CredentialFinalization::<ShexSuite>::deserialize(&transport.recv_frame()?)?;
+    transport.acknowledge()?;
     let finish = start
         .state
         .finish(finalization, ServerLoginParameters::default())?;
-    Ok((stream, finish.session_key.to_vec()))
+    Ok(finish.session_key.to_vec())
 }

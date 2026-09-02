@@ -1,7 +1,6 @@
 use std::{
     fs,
     io::Write,
-    net::SocketAddr,
     path::{Path, PathBuf},
 };
 
@@ -12,14 +11,16 @@ use chacha20poly1305::{
 };
 use keyring::v1::Entry;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-const AUTH_VERSION: u8 = 1;
+const AUTH_VERSION: u8 = 2;
 const KEYRING_SERVICE: &str = "shex";
-const DEFAULT_AUTH_FILE: &str = ".shex_auth";
+const AUTH_DIRECTORY: &str = "auth";
 
 #[derive(Serialize, Deserialize)]
 pub struct StoredAuth {
-    pub address: SocketAddr,
+    pub redis_url: String,
+    pub hostname: String,
     pub server_signature: String,
     pub code: Vec<u8>,
     pub last_session: Option<String>,
@@ -40,8 +41,25 @@ pub struct AuthFile {
 }
 
 impl AuthFile {
-    pub fn create(data: StoredAuth) -> Result<Self> {
-        let path = available_path();
+    pub fn create_for_host(data: StoredAuth, store_dir: &Path) -> Result<Self> {
+        ensure_private_directory(store_dir)?;
+        let auth_dir = store_dir.join(AUTH_DIRECTORY);
+        ensure_private_directory(&auth_dir)?;
+        let path = host_path(store_dir, &data.hostname);
+
+        if path.exists() {
+            let mut existing = Self::load(&path)?;
+            let mut data = data;
+            if existing.data.server_signature == data.server_signature
+                && existing.data.redis_url == data.redis_url
+            {
+                data.last_session = existing.data.last_session.clone();
+            }
+            existing.data = data;
+            existing.save()?;
+            return Ok(existing);
+        }
+
         let key_id = random_hex::<16>();
         let key: [u8; 32] = rand::random();
         keyring_entry(&key_id)?
@@ -55,6 +73,13 @@ impl AuthFile {
             return Err(error);
         }
         Ok(auth)
+    }
+
+    pub fn load_for_host(store_dir: &Path, hostname: &str) -> Result<Self> {
+        let path = host_path(store_dir, hostname);
+        Self::load(&path).with_context(|| {
+            format!("no saved authentication for `{hostname}`; run `shex auth {hostname}` first")
+        })
     }
 
     pub fn load(path: &Path) -> Result<Self> {
@@ -95,22 +120,37 @@ impl AuthFile {
     }
 }
 
-fn available_path() -> PathBuf {
-    let default = PathBuf::from(DEFAULT_AUTH_FILE);
-    if !default.exists() {
-        return default;
-    }
-    for index in 1u32.. {
-        let candidate = PathBuf::from(format!("{DEFAULT_AUTH_FILE}_{index:02}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!()
+pub fn default_store_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".shex")
+}
+
+fn host_path(store_dir: &Path, hostname: &str) -> PathBuf {
+    let digest = Sha256::digest(hostname.as_bytes());
+    let name: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    store_dir.join(AUTH_DIRECTORY).join(format!("{name}.auth"))
 }
 
 fn keyring_entry(key_id: &str) -> Result<Entry> {
     Entry::new(KEYRING_SERVICE, key_id).context("OS credential store is unavailable")
+}
+
+#[cfg(unix)]
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(path).with_context(|| format!("could not create {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("could not secure {}", path.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).with_context(|| format!("could not create {}", path.display()))?;
+    Ok(())
 }
 
 fn encrypt(data: &StoredAuth, key_id: &str, key: &[u8]) -> Result<Vec<u8>> {
@@ -219,13 +259,15 @@ fn write_private_replace(path: &Path, bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Envelope, StoredAuth, decrypt, encrypt};
+    use super::{Envelope, StoredAuth, decrypt, encrypt, host_path};
+    use std::path::Path;
 
     #[test]
     fn auth_payload_is_encrypted_and_authenticated() {
         let key = [7u8; 32];
         let data = StoredAuth {
-            address: "127.0.0.1:8022".parse().unwrap(),
+            redis_url: "redis://127.0.0.1/".into(),
+            hostname: "quiet-fox:1738".into(),
             server_signature: "server-a".into(),
             code: b"secret-code".to_vec(),
             last_session: Some("session-a".into()),
@@ -238,5 +280,17 @@ mod tests {
         assert_eq!(restored.code, data.code);
         assert_eq!(restored.last_session, data.last_session);
         assert!(decrypt(&envelope, &[8u8; 32]).is_err());
+    }
+
+    #[test]
+    fn host_auth_paths_are_deterministic_and_do_not_expose_hostnames() {
+        let first = host_path(Path::new("/tmp/store"), "quiet-fox:1738");
+        let second = host_path(Path::new("/tmp/store"), "quiet-fox:1738");
+        assert_eq!(first, second);
+        assert!(!first.to_string_lossy().contains("quiet-fox"));
+        assert_eq!(
+            first.extension().and_then(|value| value.to_str()),
+            Some("auth")
+        );
     }
 }
