@@ -27,3 +27,11 @@ plaintext.
 
 Deferred work is tracked only in [`TODO.md`](TODO.md). No placeholder is
 presented as a security implementation.
+
+## Native distribution
+
+Version tags build native macOS and Linux binaries on matching GitHub-hosted
+architectures. Releases include compressed archives, Debian packages, and a
+checksum manifest. Debian packages are indexed in a signed APT repository on
+GitHub Pages. The Homebrew tap installs the same release binaries and verifies
+their SHA-256 checksums.

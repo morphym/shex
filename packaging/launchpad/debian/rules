@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+export CARGO = /usr/lib/rust-1.89/bin/cargo
+export RUSTC = /usr/bin/rustc-1.89
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+export CARGO_NET_OFFLINE = true
+export RUSTFLAGS = -C debuginfo=0
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(CARGO) build --frozen --offline --release
+
+override_dh_auto_test:
+	$(CARGO) test --frozen --offline --release
+
+override_dh_auto_install:
+	install -Dm755 target/release/shex debian/shex/usr/bin/shex
+
+override_dh_auto_clean:
+	rm -rf target debian/cargo-home

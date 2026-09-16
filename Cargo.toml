@@ -1,7 +1,8 @@
 [package]
 name = "shex"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2024"
+rust-version = "1.88"
 description = "An OPAQUE-authenticated, end-to-end encrypted Redis remote shell"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -9,7 +10,7 @@ repository = "https://github.com/morphym/shex"
 homepage = "https://github.com/morphym/shex"
 keywords = ["remote-shell", "opaque", "pake", "encryption", "cli"]
 categories = ["command-line-utilities", "network-programming", "cryptography"]
-exclude = [".env", "work/**", "outputs/**"]
+exclude = [".env", "work/**", "outputs/**", "packaging/**"]
 
 [dependencies]
 anyhow = "1.0"

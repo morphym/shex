@@ -1,0 +1,21 @@
+Source: shex
+Section: net
+Priority: optional
+Maintainer: morphym <noreply@github.com>
+Build-Depends:
+ cargo-1.89,
+ debhelper-compat (= 13),
+ rustc-1.89
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/morphym/shex
+Vcs-Browser: https://github.com/morphym/shex
+Vcs-Git: https://github.com/morphym/shex.git
+
+Package: shex
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: encrypted Redis-routed remote shell
+ shex authenticates a shared code with OPAQUE and encrypts commands and
+ results end to end with ChaCha20-Poly1305. Redis routes ciphertext without
+ receiving plaintext credentials, commands, command output, or shell state.

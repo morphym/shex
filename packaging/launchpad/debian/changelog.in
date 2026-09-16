@@ -1,0 +1,5 @@
+shex (@VERSION@-0ubuntu1~@SERIES@1) @SERIES@; urgency=medium
+
+  * Publish shex @VERSION@.
+
+ -- morphym <noreply@github.com>  @DATE@

@@ -14,6 +14,36 @@ This is an SSH-like shell, not an implementation of the SSH wire protocol.
 
 ## Install
 
+### Homebrew (macOS and Linux)
+
+```sh
+brew install morphym/shex/shex
+```
+
+The Homebrew package installs a prebuilt native binary; Rust is not required.
+
+### APT (Debian and Ubuntu)
+
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://morphym.github.io/shex/apt/shex-archive-keyring.gpg \
+  | sudo tee /etc/apt/keyrings/shex.gpg >/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/shex.gpg] https://morphym.github.io/shex/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/shex.list >/dev/null
+sudo apt update
+sudo apt install shex
+```
+
+The signed APT repository provides native `amd64` and `arm64` packages; Rust is
+not required.
+
+An Ubuntu Launchpad PPA is also being prepared. Launchpad accepts signed source
+uploads and builds the installable packages itself; see
+[Launchpad publishing guide](https://github.com/morphym/shex/blob/main/packaging/launchpad/README.md)
+for the owner setup and release process.
+
+### Cargo
+
 ```sh
 cargo install shex
 ```
@@ -23,6 +53,9 @@ Upgrade an existing installation:
 ```sh
 cargo install shex --force
 ```
+
+Native archives and SHA-256 checksums are also attached to each
+[GitHub release](https://github.com/morphym/shex/releases).
 
 ## Redis configuration
 

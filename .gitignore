@@ -1,4 +1,6 @@
 /target/
+/dist/
+.DS_Store
 /work/
 /outputs/
 .shex/
