@@ -1,0 +1,19 @@
+Package: shex
+Architecture: amd64
+Version: 2.0.2
+Priority: optional
+Section: net
+Maintainer: morphym <noreply@github.com>
+Installed-Size: 9240
+Depends: libc6 (>= 2.35), libgcc-s1
+Filename: pool/main/s/shex/shex_2.0.2_amd64.deb
+Size: 2583708
+MD5sum: c62e566969b75a4895b93902f7cf746b
+SHA1: 7565eb9075b210cf90cd7053e86708b17b991f51
+SHA256: 2eee74da6f0bd33924bd2fc990a230ffc4f621125a21e93969062ab58eb75ba0
+SHA512: a2436e7ab476c9b191b47efabfaff10251c8693c6144d66bf1fe6ae09952620aae69ec976840f45347593aeee2e8591dc9f6efe72ffd92edd1d11234d067c9cb
+Homepage: https://github.com/morphym/shex
+Description: OPAQUE-authenticated, end-to-end encrypted Redis remote shell
+ shex provides encrypted remote shell sessions routed through Redis without
+ exposing authentication codes, commands, output, or shell state to Redis.
+
