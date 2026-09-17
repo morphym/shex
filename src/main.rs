@@ -1,6 +1,7 @@
 mod auth;
 mod auth_file;
 mod channel;
+mod credential_store;
 mod protocol;
 mod redis_store;
 mod redis_transport;
@@ -123,7 +124,7 @@ enum LatencyAction {
 
 #[derive(Subcommand)]
 enum RedisAction {
-    /// Save or update a named Redis URL in the OS credential store.
+    /// Save or update a named Redis URL in secure credential storage.
     Add {
         name: Option<String>,
         #[arg(env = "REDIS_URL", hide_env_values = true)]
@@ -411,6 +412,9 @@ fn main() -> Result<()> {
             }
             let path = redis_store::add(&store_dir, &name, &redis_url)?;
             println!("saved Redis server `{name}` in {}", path.display());
+            if let Some(notice) = credential_store::fallback_notice() {
+                println!("{notice}");
+            }
         }
     }
     Ok(())

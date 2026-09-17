@@ -98,6 +98,7 @@ fi
 
 find "$work_dir" -maxdepth 1 -type f \
   \( -name "shex_${version}*.changes" -o \
+     -name "shex_${version}*.buildinfo" -o \
      -name "shex_${version}*.dsc" -o \
      -name "shex_${version}*.tar.*" \) \
   -exec cp {} "$output_dir/" \;

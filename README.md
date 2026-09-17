@@ -38,7 +38,7 @@ The signed APT repository provides native `amd64` and `arm64` packages; Rust is
 not required.
 
 An Ubuntu Launchpad PPA is also being prepared. Launchpad accepts signed source
-uploads and builds the installable packages itself; see
+uploads and builds the installable packages itself; see the
 [Launchpad publishing guide](https://github.com/morphym/shex/blob/main/packaging/launchpad/README.md)
 for the owner setup and release process.
 
@@ -88,9 +88,13 @@ When `REDIS_URL` is already set, only the name is needed. Shex sends a Redis
 `PING` before saving. If the server cannot be reached, it asks whether the entry
 should be kept anyway.
 
-The URL is stored in macOS Keychain or Linux Secret Service. Only a private,
-hashed marker is written under `~/.shex/redis`. The most recently added server
-becomes the default, so this uses it automatically:
+The URL is stored in macOS Keychain or, on Linux, the first available secure
+backend: Secret Service, the kernel keyring, or an encrypted local shex vault.
+The local vault is used for headless containers that provide neither OS
+service; its random key and ciphertext are separate `0600` files under the
+private `0700` `~/.shex` directory. Only a hashed marker is written under
+`~/.shex/redis`. The most recently added server becomes the default, so this
+uses it automatically:
 
 ```sh
 shex latency test
@@ -142,8 +146,8 @@ Authentication for every host is stored under `~/.shex/auth`. Filenames are
 hostname hashes. Each file contains the Redis location, hostname, server
 fingerprint, reusable credential, and last-session identifier. Its payload is
 encrypted with ChaCha20-Poly1305, while the random encryption key is held by
-macOS Keychain or Linux Secret Service through the operating-system credential
-manager. Re-running `auth` safely updates that host's entry.
+the same secure credential backend described above. Re-running `auth` safely
+updates that host's entry.
 
 `shex authenticate` remains an alias for `shex auth`.
 
@@ -246,8 +250,8 @@ database if ciphertext must never reach Redis disk.
 - OPAQUE with Argon2 protects the authentication exchange.
 - ChaCha20-Poly1305 authenticates and encrypts post-login traffic.
 - Auth files are encrypted and bound to the authenticated host fingerprint.
-- Saved Redis URLs are held by the operating-system credential store; local
-  marker filenames are hashes of their aliases.
+- Saved Redis URLs are held by the platform credential store or the encrypted
+  Linux container fallback; marker filenames are hashes of their aliases.
 - Redis routing metadata, message sizes, and timing are not hidden.
 - Use a high-entropy code; a short numeric code remains guessable.
 - Redis access is local/private trust in 2.0. Redis ACLs remain important because

@@ -1045,18 +1045,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "keyring"
-version = "4.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72585bb6cc9bc370d1d545b7e23fcce71dfd4461c5e15275e3cf51bdfd9a980a"
-dependencies = [
- "apple-native-keyring-store",
- "keyring-core",
- "windows-native-keyring-store",
- "zbus-secret-service-keyring-store",
-]
-
-[[package]]
 name = "keyring-core"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1070,6 +1058,26 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "linux-keyutils"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83270a18e9f90d0707c41e9f35efada77b64c0e6f3f1810e71c8368a864d5590"
+dependencies = [
+ "bitflags",
+ "libc",
+]
+
+[[package]]
+name = "linux-keyutils-keyring-store"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39fbed79f71dc21eb21d3d07c0e908a3c58ff9a1fdbf5cf44230fb3deb6d994b"
+dependencies = [
+ "keyring-core",
+ "linux-keyutils",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -1736,15 +1744,17 @@ dependencies = [
 
 [[package]]
 name = "shex"
-version = "2.0.2"
+version = "2.0.3"
 dependencies = [
  "anyhow",
+ "apple-native-keyring-store",
  "argon2",
  "chacha20poly1305",
  "clap",
  "dotenvy",
  "hkdf",
- "keyring",
+ "keyring-core",
+ "linux-keyutils-keyring-store",
  "opaque-ke",
  "rand 0.9.5",
  "rand_core 0.6.4",
@@ -1754,6 +1764,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
 ]
 
 [[package]]

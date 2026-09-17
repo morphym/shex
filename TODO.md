@@ -3,9 +3,9 @@
 ## Client credential setup
 
 - Add a first-run setup prompt that lets the user select an available
-  operating-system credential lock and records that preference. Until then,
-  shex uses the platform default: macOS Keychain on macOS and Secret Service on
-  Linux.
+  credential backend and records that preference. Until then, shex selects
+  macOS Keychain on macOS; Linux tries Secret Service, the kernel keyring, and
+  finally its encrypted private-file vault.
 - Add an explicit migration command for legacy `.shex_auth*` files.
 
 ## Global Redis federation

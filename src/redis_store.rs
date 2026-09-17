@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use keyring::v1::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -25,9 +24,9 @@ pub fn add(store_dir: &Path, name: &str, redis_url: &str) -> Result<PathBuf> {
     ensure_private_directory(store_dir)?;
     ensure_private_directory(&directory)?;
 
-    keyring_entry(name)?
+    keyring_entry(store_dir, name)?
         .set_secret(redis_url.as_bytes())
-        .context("could not store the Redis URL in the OS credential store")?;
+        .context("could not store the Redis URL in secure credential storage")?;
     let path = marker_path(store_dir, name);
     let marker = serde_json::to_vec(&Marker {
         version: STORE_VERSION,
@@ -86,9 +85,9 @@ pub fn resolve(store_dir: &Path, reference: &str) -> Result<String> {
     if marker.version != STORE_VERSION || marker.name != reference {
         bail!("local Redis server marker does not match `{reference}`");
     }
-    let secret = keyring_entry(reference)?
+    let secret = keyring_entry(store_dir, reference)?
         .get_secret()
-        .context("could not retrieve the Redis URL from the OS credential store")?;
+        .context("could not retrieve the Redis URL from secure credential storage")?;
     let redis_url = String::from_utf8(secret).context("stored Redis URL is not valid UTF-8")?;
     redis::Client::open(redis_url.as_str()).context("stored Redis URL is invalid")?;
     Ok(redis_url)
@@ -129,8 +128,8 @@ fn marker_path(store_dir: &Path, name: &str) -> PathBuf {
         .join(format!("{}.server", server_hash(name)))
 }
 
-fn keyring_entry(name: &str) -> Result<Entry> {
-    Entry::new(KEYRING_SERVICE, &server_hash(name)).context("OS credential store is unavailable")
+fn keyring_entry(store_dir: &Path, name: &str) -> Result<crate::credential_store::Entry> {
+    crate::credential_store::entry(store_dir, KEYRING_SERVICE, &server_hash(name))
 }
 
 #[cfg(unix)]

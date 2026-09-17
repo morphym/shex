@@ -9,7 +9,7 @@ does not need network access to crates.io.
 1. Add an OpenPGP public key to the Launchpad account and confirm it from the
    email Launchpad sends.
 2. Accept the Launchpad terms and Ubuntu Code of Conduct.
-3. Create a public PPA named `shex`.
+3. Create a public PPA named `shex` under the `morphym` account.
 4. On the PPA **Change details** page, enable `amd64` and `arm64`.
 
 Do not commit or share the private OpenPGP key. The upload must be signed by a
@@ -36,14 +36,14 @@ DEBSIGN_KEYID=YOUR_GPG_FINGERPRINT \
 Upload the generated source changes file:
 
 ```sh
-dput ppa:YOUR_LAUNCHPAD_USER/shex \
+dput ppa:morphym/shex \
   dist/launchpad/shex_VERSION-0ubuntu1~noble1_source.changes
 ```
 
 After Launchpad finishes both builds, users install without Rust:
 
 ```sh
-sudo add-apt-repository ppa:YOUR_LAUNCHPAD_USER/shex
+sudo add-apt-repository ppa:morphym/shex
 sudo apt update
 sudo apt install shex
 ```

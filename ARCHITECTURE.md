@@ -14,12 +14,14 @@
    signals avoid idle polling.
 7. `close` removes the host-local shell and Redis lookup.
 8. Client authentication entries are encrypted under `~/.shex/auth`; their
-   encryption keys live in the operating-system credential store.
+   encryption keys live in the platform credential store. Headless Linux falls
+   back from Secret Service to the kernel keyring, then to a private encrypted
+   local vault when container security policy blocks both OS services.
 9. `latency test` measures Redis PING round trips and, when a saved host is
    selected, authenticated encrypted ping/pong round trips through that host.
-10. `redis add` stores named Redis URLs in the operating-system credential
-    store, writes only a hashed local marker under `~/.shex/redis`, verifies the
-    server before saving, and selects the newest entry as the local default.
+10. `redis add` stores named Redis URLs in the same credential backend, writes
+    only a hashed local marker under `~/.shex/redis`, verifies the server before
+    saving, and selects the newest entry as the local default.
 
 The Redis hostname and session hash are routing metadata. Authentication codes,
 session identifiers, commands, output, and shell state are never Redis

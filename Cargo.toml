@@ -1,6 +1,6 @@
 [package]
 name = "shex"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 rust-version = "1.88"
 description = "An OPAQUE-authenticated, end-to-end encrypted Redis remote shell"
@@ -19,7 +19,7 @@ chacha20poly1305 = "0.10"
 clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
 hkdf = "0.12"
-keyring = "4.1"
+keyring-core = "1.0"
 opaque-ke = { version = "4.0.1", features = ["argon2", "ristretto255"] }
 rand = "0.9"
 rand_core = { version = "0.6", features = ["getrandom"] }
@@ -29,3 +29,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-keyutils-keyring-store = "1.0"
+zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1.1"

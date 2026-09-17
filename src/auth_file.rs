@@ -9,7 +9,6 @@ use chacha20poly1305::{
     ChaCha20Poly1305, KeyInit,
     aead::{Aead, Payload},
 };
-use keyring::v1::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -62,14 +61,14 @@ impl AuthFile {
 
         let key_id = random_hex::<16>();
         let key: [u8; 32] = rand::random();
-        keyring_entry(&key_id)?
+        keyring_entry(store_dir, &key_id)?
             .set_secret(&key)
-            .context("could not store the auth encryption key in the OS credential store")?;
+            .context("could not store the auth encryption key in secure credential storage")?;
 
         let auth = Self { data, path, key_id };
         if let Err(error) = auth.write_new(&key) {
-            let _ = keyring_entry(&auth.key_id)
-                .and_then(|entry| entry.delete_credential().map_err(Into::into));
+            let _ =
+                keyring_entry(store_dir, &auth.key_id).and_then(|entry| entry.delete_credential());
             return Err(error);
         }
         Ok(auth)
@@ -91,9 +90,13 @@ impl AuthFile {
         if envelope.version != AUTH_VERSION {
             bail!("unsupported shex auth file version {}", envelope.version);
         }
-        let key = keyring_entry(&envelope.key_id)?
+        let store_dir = path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow::anyhow!("auth file has no store directory"))?;
+        let key = keyring_entry(store_dir, &envelope.key_id)?
             .get_secret()
-            .context("could not retrieve this auth file's key from the OS credential store")?;
+            .context("could not retrieve this auth file's key from secure credential storage")?;
         let data = decrypt(&envelope, &key)?;
         Ok(Self {
             data,
@@ -103,9 +106,14 @@ impl AuthFile {
     }
 
     pub fn save(&self) -> Result<()> {
-        let key = keyring_entry(&self.key_id)?
+        let store_dir = self
+            .path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| anyhow::anyhow!("auth file has no store directory"))?;
+        let key = keyring_entry(store_dir, &self.key_id)?
             .get_secret()
-            .context("could not retrieve this auth file's key from the OS credential store")?;
+            .context("could not retrieve this auth file's key from secure credential storage")?;
         let bytes = encrypt(&self.data, &self.key_id, &key)?;
         write_private_replace(&self.path, &bytes)
     }
@@ -134,8 +142,8 @@ fn host_path(store_dir: &Path, hostname: &str) -> PathBuf {
     store_dir.join(AUTH_DIRECTORY).join(format!("{name}.auth"))
 }
 
-fn keyring_entry(key_id: &str) -> Result<Entry> {
-    Entry::new(KEYRING_SERVICE, key_id).context("OS credential store is unavailable")
+fn keyring_entry(store_dir: &Path, key_id: &str) -> Result<crate::credential_store::Entry> {
+    crate::credential_store::entry(store_dir, KEYRING_SERVICE, key_id)
 }
 
 #[cfg(unix)]
